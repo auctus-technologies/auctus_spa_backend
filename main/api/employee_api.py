@@ -114,6 +114,28 @@ def generate_employee_id():
     return f"AUC{next_num:03d}"
 
 
+def compute_and_save_embedding(user: User):
+    """Compute ArcFace face embedding from the user's avatar and persist it."""
+    if not user.avatar or not user.avatar.name:
+        return
+    avatar_path = user.avatar.path
+    if not os.path.exists(avatar_path):
+        return
+    try:
+        from deepface import DeepFace
+        result = DeepFace.represent(
+            img_path=avatar_path,
+            model_name="ArcFace",
+            detector_backend="opencv",
+            enforce_detection=False,
+            align=True,
+        )
+        user.avatar_embedding = result[0]["embedding"]
+        user.save(update_fields=["avatar_embedding"])
+    except Exception as e:
+        print(f"[embedding] failed for user {user.id}: {e}")
+
+
 def save_base64_avatar(user: User, base64_data: str):
     """Convert base64 image data to Django ImageField file"""
     if not base64_data:
@@ -197,10 +219,11 @@ def create_employee(request, payload: EmployeeCreateSchema):
         role='employee',
     )
 
-    # Save avatar if provided (base64)
+    # Save avatar and pre-compute face embedding for fast attendance checks
     if payload.avatar_base64:
         save_base64_avatar(user, payload.avatar_base64)
-    
+        compute_and_save_embedding(user)
+
     # Create employee profile with all personal info
     profile = EmployeeProfile.objects.create(
         user=user,
@@ -311,9 +334,10 @@ def update_employee(request, employee_id: int, payload: EmployeeUpdateSchema):
     user.login_email = payload.login_email
     if payload.status:
         user.status = payload.status
-    # Update avatar if new image provided (base64)
+    # Update avatar and refresh face embedding
     if payload.avatar_base64:
         save_base64_avatar(user, payload.avatar_base64)
+        compute_and_save_embedding(user)
     user.save()
     
     # Update or create profile with all personal info

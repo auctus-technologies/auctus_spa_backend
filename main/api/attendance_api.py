@@ -133,13 +133,9 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
 
     user = profile.user
 
-    # ── 2. Ensure avatar exists ───────────────────────────────────────────
-    if not user.avatar:
+    # ── 2. Ensure face embedding was stored at registration ───────────────
+    if not user.avatar_embedding:
         return 400, {"error": "no_avatar", "message": "Profile photo not set. Contact admin."}
-
-    avatar_path = user.avatar.path
-    if not os.path.exists(avatar_path):
-        return 400, {"error": "no_avatar", "message": "Profile photo file missing. Contact admin."}
 
     # ── 3. Decode webcam photo ────────────────────────────────────────────
     try:
@@ -147,13 +143,13 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
     except Exception:
         return 400, {"error": "invalid_photo", "message": "Invalid photo data"}
 
-    # ── 4. Face verification with DeepFace + ArcFace ──────────────────────
+    # ── 4. Webcam-only DeepFace inference; avatar embedding from DB ───────
     tmp_path = None
     face_verified = False
     try:
-        from deepface import DeepFace  # lazy import; cached after first load
+        from deepface import DeepFace
 
-        # Decode bytes → numpy → apply CLAHE (fixes dark/uneven lighting)
+        # CLAHE preprocessing to handle uneven office lighting
         nparr = np.frombuffer(photo_bytes, np.uint8)
         img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img_bgr is not None:
@@ -163,12 +159,9 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
             l = clahe.apply(l)
             enhanced = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
         else:
-            enhanced = img_bgr  # fallback if decode fails
+            enhanced = None
 
-        # Save enhanced image as temp file.
-        # Use mkstemp + immediate fd close so cv2.imwrite can open the path on
-        # Windows (NamedTemporaryFile holds the handle open, causing a sharing
-        # violation that silently makes cv2.imwrite write nothing).
+        # mkstemp: fd closed before cv2 writes (Windows file-locking fix)
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
         os.close(tmp_fd)
         if enhanced is not None:
@@ -177,43 +170,30 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
             with open(tmp_path, 'wb') as f:
                 f.write(photo_bytes)
 
-        def _verify(detector, enforce):
-            return DeepFace.verify(
-                img1_path=avatar_path,
-                img2_path=tmp_path,
-                model_name="ArcFace",
-                detector_backend=detector,
-                enforce_detection=enforce,
-                align=True,
-                threshold=0.72,
-            )
+        webcam_res = DeepFace.represent(
+            img_path=tmp_path,
+            model_name="ArcFace",
+            detector_backend="opencv",
+            enforce_detection=False,
+            align=True,
+        )
+        webcam_emb = np.array(webcam_res[0]["embedding"])
+        avatar_emb = np.array(user.avatar_embedding)
 
-        result = None
-        # Pass 1: RetinaFace strict — best accuracy
-        try:
-            result = _verify("retinaface", enforce=True)
-        except Exception:
-            pass
-        # Pass 2: RetinaFace relaxed — handles partially visible faces
-        if result is None:
-            try:
-                result = _verify("retinaface", enforce=False)
-            except Exception:
-                pass
-        # Pass 3: opencv relaxed — final fallback
-        if result is None:
-            try:
-                result = _verify("opencv", enforce=False)
-            except Exception:
-                pass
-
-        face_verified = result.get("verified", False) if result else False
+        cosine_dist = 1.0 - float(
+            np.dot(avatar_emb, webcam_emb) /
+            (np.linalg.norm(avatar_emb) * np.linalg.norm(webcam_emb))
+        )
+        match_confidence = round((1.0 - cosine_dist) * 100, 1)
+        face_verified = match_confidence >= 40.0
+        print(f"[face] user={user.id} match={match_confidence}% verified={face_verified}")
 
     except ImportError:
         return 400, {"error": "server_error", "message": "Face recognition library not installed"}
-    except Exception as _exc:
+    except Exception:
         import traceback; traceback.print_exc()
         face_verified = False
+        match_confidence = 0.0
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -276,6 +256,7 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
         "employee_id": profile.employee_id,
         "designation": designation_label,
         "department": department_label,
+        "match_confidence": match_confidence,
         "check_in_time": fmt_time(attendance.check_in_time),
         "check_in_date": date_str,
         "check_in_address": attendance.check_in_address,

@@ -40,6 +40,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="employee")
     status = models.CharField(max_length=20, default="active")
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    avatar_embedding = models.JSONField(null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
