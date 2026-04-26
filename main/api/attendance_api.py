@@ -5,6 +5,9 @@ import numpy as np
 import cv2
 from datetime import date, time, datetime
 from typing import Optional, List
+
+# Loaded once at import time — reused on every request
+_face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
 from . import api
@@ -160,6 +163,17 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
             enhanced = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
         else:
             enhanced = None
+
+        # Count faces directly with Haar cascade before running DeepFace.
+        # DeepFace.represent(enforce_detection=False) is unreliable for multi-face counting.
+        check_img = enhanced if enhanced is not None else img_bgr
+        if check_img is not None:
+            gray = cv2.cvtColor(check_img, cv2.COLOR_BGR2GRAY)
+            detected_faces = _face_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
+            )
+            if len(detected_faces) > 1:
+                return 400, {"error": "multiple_faces", "message": "Multiple faces detected. Please ensure only your face is visible."}
 
         # mkstemp: fd closed before cv2 writes (Windows file-locking fix)
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
