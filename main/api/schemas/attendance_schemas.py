@@ -46,7 +46,8 @@ class MarkFaceAttendanceResponse(Schema):
     employee_id: str
     designation: str
     department: str
-    match_confidence: float  # percentage 0–100
+    match_confidence: float
+    is_late: bool = False
     check_in_time: Optional[str] = None
     check_in_date: Optional[str] = None
     check_in_address: Optional[str] = None

@@ -1,10 +1,9 @@
 from ninja import File, Schema
+from ninja.files import UploadedFile
 from datetime import datetime, time
 from typing import Optional
-from django.core.files.base import ContentFile
-from django.conf import settings
+from django.shortcuts import get_object_or_404
 from django.db.models import Q
-import base64
 import os
 from . import api
 from main.models import User, EmployeeProfile, Address, BankDetails
@@ -136,34 +135,9 @@ def compute_and_save_embedding(user: User):
         print(f"[embedding] failed for user {user.id}: {e}")
 
 
-def save_base64_avatar(user: User, base64_data: str):
-    """Convert base64 image data to Django ImageField file"""
-    if not base64_data:
-        return
-    
-    try:
-        # Parse base64 data (format: data:image/png;base64,xxxxx or just xxxxx)
-        if ',' in base64_data:
-            format_info, img_data = base64_data.split(',', 1)
-            # Extract extension from format info
-            if 'image/' in format_info:
-                ext = format_info.split('image/')[1].split(';')[0]
-            else:
-                ext = 'png'
-        else:
-            img_data = base64_data
-            ext = 'png'
-        
-        # Decode base64
-        image_bytes = base64.b64decode(img_data)
-        
-        # Create filename
-        filename = f"avatar_{user.id}.{ext}"
-        
-        # Save to ImageField
-        user.avatar.save(filename, ContentFile(image_bytes), save=True)
-    except Exception as e:
-        print(f"Error saving avatar: {e}")
+def save_uploaded_avatar(user: User, avatar: UploadedFile):
+    ext = os.path.splitext(avatar.name)[1] or '.jpg'
+    user.avatar.save(f"avatar_{user.id}{ext}", avatar, save=True)
 
 
 def get_avatar_url(user: User) -> Optional[str]:
@@ -218,11 +192,6 @@ def create_employee(request, payload: EmployeeCreateSchema):
         password=payload.password,
         role='employee',
     )
-
-    # Save avatar and pre-compute face embedding for fast attendance checks
-    if payload.avatar_base64:
-        save_base64_avatar(user, payload.avatar_base64)
-        compute_and_save_embedding(user)
 
     # Create employee profile with all personal info
     profile = EmployeeProfile.objects.create(
@@ -334,10 +303,6 @@ def update_employee(request, employee_id: int, payload: EmployeeUpdateSchema):
     user.login_email = payload.login_email
     if payload.status:
         user.status = payload.status
-    # Update avatar and refresh face embedding
-    if payload.avatar_base64:
-        save_base64_avatar(user, payload.avatar_base64)
-        compute_and_save_embedding(user)
     user.save()
     
     # Update or create profile with all personal info
@@ -396,3 +361,12 @@ def delete_employee(request, employee_id: int):
     user = User.objects.get(id=employee_id, role='employee')
     user.delete()
     return {"success": True, "message": "Employee deleted successfully"}
+
+
+@api.post("/employees/{employee_id}/avatar")
+def upload_avatar(request, employee_id: int, avatar: UploadedFile = File(...)):
+    """Upload or replace an employee's profile photo and recompute face embedding."""
+    user = get_object_or_404(User, id=employee_id, role='employee')
+    save_uploaded_avatar(user, avatar)
+    compute_and_save_embedding(user)
+    return {"avatar_url": get_avatar_url(user)}

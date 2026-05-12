@@ -21,7 +21,6 @@ class EmployeeCreateSchema(Schema):
     religion: Optional[str] = None
     check_in_time: Optional[str] = None
     check_out_time: Optional[str] = None
-    avatar_base64: Optional[str] = None  
     address: Optional[AddressSchema] = None
     bank: Optional[BankDetailsSchema] = None
 
@@ -44,7 +43,6 @@ class EmployeeUpdateSchema(Schema):
     check_in_time: Optional[str] = None
     check_out_time: Optional[str] = None
     date_of_leaving: Optional[str] = None
-    avatar_base64: Optional[str] = None 
     address: Optional[AddressSchema] = None
     bank: Optional[BankDetailsSchema] = None
 

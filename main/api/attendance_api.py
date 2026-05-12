@@ -226,8 +226,13 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
     )
 
     # ── 6. Check-in or check-out ──────────────────────────────────────────
+    assigned_in  = profile.check_in_time
+    assigned_out = profile.check_out_time
+    is_late = False
+
     if not attendance.check_in_time:
         action = "check_in"
+        is_late = bool(assigned_in and current_time > assigned_in)
         attendance.check_in_time = current_time
         attendance.check_in_address = address
         attendance.status = "present"
@@ -237,6 +242,12 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
         attendance.save()
 
     elif not attendance.check_out_time:
+        # Block early check-out
+        if assigned_out and current_time < assigned_out:
+            return 400, {
+                "error": "early_checkout",
+                "message": f"Early check-out not allowed. Your check-out time is {assigned_out.strftime('%I:%M %p')}.",
+            }
         action = "check_out"
         attendance.check_out_time = current_time
         attendance.check_out_address = address
@@ -271,6 +282,7 @@ def mark_face_attendance(request, payload: MarkFaceAttendanceSchema):
         "designation": designation_label,
         "department": department_label,
         "match_confidence": match_confidence,
+        "is_late": is_late,
         "check_in_time": fmt_time(attendance.check_in_time),
         "check_in_date": date_str,
         "check_in_address": attendance.check_in_address,
